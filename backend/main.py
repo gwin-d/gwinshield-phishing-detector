@@ -7,6 +7,7 @@ import joblib
 import os
 import re
 import numpy as np
+import uvicorn  # <-- Imported for production hosting management
 
 from database import get_db, init_db, ScanRecord
 from ml.features import extract_features
@@ -221,3 +222,9 @@ def get_stats(db: Session = Depends(get_db)):
         "model_precision": model_data.get("precision", "N/A"),
         "dataset":         model_data.get("dataset",   "N/A"),
     }
+
+# ── Dynamic Port Block Entry Point for Render Cloud Architecture ──
+if __name__ == "__main__":
+    # Pulls the runtime port assigned by Render, defaulting to 8000 on your local computer
+    production_port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=production_port)
