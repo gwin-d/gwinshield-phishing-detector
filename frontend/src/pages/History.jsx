@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import {
   ShieldAlert, ShieldCheck, Search,
-  Clock, BarChart2, Download, Copy
+  Clock, BarChart2, Download, Copy, FileText
 } from 'lucide-react'
 import { getHistory, getStats } from '../api/client'
 import { toast } from '../components/Toast'
@@ -11,10 +11,12 @@ import {
   PieChart, Pie, Cell,
   Tooltip, ResponsiveContainer, Legend
 } from 'recharts'
+import jsPDF from 'jspdf'
+import autoTable from 'jspdf-autotable'
 
 function timeAgo(dateString) {
   const now  = new Date()
-  const then = new Date(new Date(dateString).getTime() + 60 * 60 * 1000)
+  const then = new Date(dateString)
   const diff = Math.floor((now - then) / 1000)
   if (diff < 0)     return 'just now'
   if (diff < 60)    return `${diff}s ago`
@@ -45,32 +47,102 @@ export default function History() {
   })
 
   const exportCSV = () => {
-    if (filtered.length === 0) {
-      toast('No records to export', 'error')
-      return
-    }
-    const headers = [
-      'URL', 'Verdict', 'Hybrid Score',
-      'ML Score', 'Heuristic Score', 'Source', 'Scanned At'
-    ]
+    if (filtered.length === 0) { toast('No records to export', 'error'); return }
+    const headers = ['URL','Verdict','Hybrid Score','ML Score','Heuristic Score','Source','Scanned At']
     const rows = filtered.map(r => [
-      `"${r.url}"`,
-      r.verdict,
-      r.hybrid_score,
-      r.ml_score,
-      r.heuristic_score,
-      r.source,
-      new Date(r.scanned_at).toLocaleString(),
+      `"${r.url}"`, r.verdict,
+      r.hybrid_score, r.ml_score, r.heuristic_score,
+      r.source, new Date(r.scanned_at).toLocaleString(),
     ])
     const csv  = [headers, ...rows].map(r => r.join(',')).join('\n')
     const blob = new Blob([csv], { type: 'text/csv' })
     const url  = URL.createObjectURL(blob)
     const a    = document.createElement('a')
-    a.href     = url
+    a.href = url
     a.download = `gwinshield_history_${Date.now()}.csv`
     a.click()
     URL.revokeObjectURL(url)
-    toast('Scan history exported successfully', 'success')
+    toast('CSV exported successfully', 'success')
+  }
+
+  const exportPDF = () => {
+    if (filtered.length === 0) { toast('No records to export', 'error'); return }
+
+    const doc = new jsPDF({ orientation: 'landscape' })
+
+    // Header
+    doc.setFillColor(13, 27, 62)
+    doc.rect(0, 0, 297, 30, 'F')
+
+    doc.setTextColor(0, 180, 216)
+    doc.setFontSize(18)
+    doc.setFont('helvetica', 'bold')
+    doc.text('GwinShield — Scan History Report', 14, 14)
+
+    doc.setTextColor(148, 163, 184)
+    doc.setFontSize(9)
+    doc.setFont('helvetica', 'normal')
+    doc.text(`Generated: ${new Date().toLocaleString()}`, 14, 22)
+    doc.text(
+      `Total: ${filtered.length} records  |  Phishing: ${stats?.phishing_found || 0}  |  Safe: ${stats?.safe_found || 0}`,
+      14, 27
+    )
+
+    // Table
+    autoTable(doc, {
+      startY: 35,
+      head: [['#', 'URL', 'Verdict', 'Hybrid %', 'ML %', 'Heuristic %', 'Source', 'Scanned At']],
+      body: filtered.map((r, i) => [
+        i + 1,
+        r.url.length > 60 ? r.url.slice(0, 57) + '...' : r.url,
+        r.verdict,
+        `${Math.round(r.hybrid_score * 100)}%`,
+        `${Math.round(r.ml_score * 100)}%`,
+        `${Math.round(r.heuristic_score * 100)}%`,
+        r.source,
+        new Date(r.scanned_at).toLocaleString(),
+      ]),
+      styles: {
+        fontSize:  8,
+        cellPadding: 3,
+      },
+      headStyles: {
+        fillColor:  [21, 101, 192],
+        textColor:  255,
+        fontStyle:  'bold',
+      },
+      bodyStyles: {
+        textColor: [30, 41, 59],
+      },
+      alternateRowStyles: {
+        fillColor: [241, 245, 249],
+      },
+      didParseCell(data) {
+        if (data.column.index === 2 && data.section === 'body') {
+          const verdict = data.cell.raw
+          data.cell.styles.textColor =
+            verdict === 'Phishing' ? [220, 38, 38] : [5, 150, 105]
+          data.cell.styles.fontStyle = 'bold'
+        }
+      },
+      margin: { left: 14, right: 14 },
+    })
+
+    // Footer
+    const pageCount = doc.getNumberOfPages()
+    for (let i = 1; i <= pageCount; i++) {
+      doc.setPage(i)
+      doc.setFontSize(7)
+      doc.setTextColor(148, 163, 184)
+      doc.text(
+        `GwinShield — Hybrid Phishing Detection System | Rivers State University | Page ${i} of ${pageCount}`,
+        14,
+        doc.internal.pageSize.height - 8
+      )
+    }
+
+    doc.save(`gwinshield_report_${Date.now()}.pdf`)
+    toast('PDF report exported successfully', 'success')
   }
 
   const copyURL = (e, url) => {
@@ -92,22 +164,33 @@ export default function History() {
       className="max-w-7xl mx-auto px-6 pt-28 pb-20"
     >
       {/* Header */}
-      <div className="flex items-start justify-between mb-10">
+      <div className="flex items-start justify-between mb-10 flex-wrap gap-4">
         <div>
           <h1 className="text-4xl font-black mb-2">
             Scan <span className="gradient-text">History</span>
           </h1>
           <p className="text-muted">All URLs checked through GwinShield</p>
         </div>
-        <button
-          onClick={exportCSV}
-          className="flex items-center gap-2 glass px-5 py-3 rounded-xl
-            text-cyan border border-cyan/30 hover:bg-cyan/10
-            transition-all duration-200 text-sm font-medium mt-2"
-        >
-          <Download size={15} />
-          Export CSV
-        </button>
+        <div className="flex gap-3 flex-wrap">
+          <button
+            onClick={exportCSV}
+            className="flex items-center gap-2 glass px-5 py-3 rounded-xl
+              text-cyan border border-cyan/30 hover:bg-cyan/10
+              transition-all duration-200 text-sm font-medium"
+          >
+            <Download size={15} />
+            Export CSV
+          </button>
+          <button
+            onClick={exportPDF}
+            className="flex items-center gap-2 glass px-5 py-3 rounded-xl
+              text-warning border border-warning/30 hover:bg-warning/10
+              transition-all duration-200 text-sm font-medium"
+          >
+            <FileText size={15} />
+            Export PDF
+          </button>
+        </div>
       </div>
 
       {/* Stats Row */}
@@ -133,10 +216,8 @@ export default function History() {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
 
-        {/* Table — takes 2 columns */}
+        {/* Table */}
         <div className="lg:col-span-2">
-
-          {/* Filters */}
           <div className="flex flex-col sm:flex-row gap-3 mb-6">
             <div className="relative flex-1">
               <Search size={16} className="absolute left-4 top-1/2
@@ -172,7 +253,6 @@ export default function History() {
             </div>
           </div>
 
-          {/* Records */}
           {loading ? (
             <div className="space-y-3">
               {[1,2,3,4,5,6].map(i => <SkeletonRow key={i} />)}
@@ -204,13 +284,12 @@ export default function History() {
                         ? 'border-l-danger'
                         : 'border-l-safe'}`}
                   >
-                    {/* Main row */}
                     <div className="flex items-center justify-between gap-4">
                       <div className="flex items-center gap-3 min-w-0">
                         {r.verdict === 'Phishing'
                           ? <ShieldAlert size={18}
                               className="text-danger flex-shrink-0" />
-                          : <ShieldCheck size={18}
+                          : <ShieldCheck  size={18}
                               className="text-safe flex-shrink-0" />}
                         <span className="text-sm text-white/80 truncate">
                           {r.url}
@@ -229,14 +308,12 @@ export default function History() {
                       </div>
                     </div>
 
-                    {/* Expanded details */}
                     {expanded === r.id && (
                       <motion.div
                         initial={{ opacity: 0 }}
                         animate={{ opacity: 1 }}
                         className="mt-4 pt-4 border-t border-white/10"
                       >
-                        {/* Score bars */}
                         <div className="grid grid-cols-3 gap-4 mb-3">
                           {[
                             { label: 'Hybrid Score',    value: r.hybrid_score    },
@@ -252,16 +329,16 @@ export default function History() {
                               </div>
                               <div className="h-1.5 bg-white/10 rounded-full">
                                 <div
-                                  className={`h-full rounded-full transition-all
-                                    ${s.value >= 0.5 ? 'bg-danger' : 'bg-safe'}`}
+                                  className={`h-full rounded-full
+                                    ${s.value >= 0.5
+                                      ? 'bg-danger'
+                                      : 'bg-safe'}`}
                                   style={{ width: `${s.value * 100}%` }}
                                 />
                               </div>
                             </div>
                           ))}
                         </div>
-
-                        {/* Meta + copy button */}
                         <div className="flex items-center
                           justify-between flex-wrap gap-2">
                           <div className="text-xs text-muted">
@@ -291,68 +368,44 @@ export default function History() {
           )}
         </div>
 
-        {/* Pie Chart — sticky sidebar */}
+        {/* Pie Chart */}
         <div className="glass rounded-2xl p-6 h-fit sticky top-28">
           <div className="flex items-center gap-2 mb-6">
             <BarChart2 size={18} className="text-cyan" />
             <h3 className="font-semibold">Scan Breakdown</h3>
           </div>
-
           {stats && (stats.safe_found + stats.phishing_found) > 0 ? (
             <>
               <ResponsiveContainer width="100%" height={220}>
                 <PieChart>
                   <Pie
                     data={pieData}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={55}
-                    outerRadius={90}
-                    paddingAngle={4}
-                    dataKey="value"
+                    cx="50%" cy="50%"
+                    innerRadius={55} outerRadius={90}
+                    paddingAngle={4} dataKey="value"
                   >
                     {pieData.map((entry, i) => (
-                      <Cell
-                        key={i}
-                        fill={entry.color}
-                        style={{
-                          filter: `drop-shadow(0 0 6px ${entry.color})`
-                        }}
+                      <Cell key={i} fill={entry.color}
+                        style={{ filter: `drop-shadow(0 0 6px ${entry.color})` }}
                       />
                     ))}
                   </Pie>
-                  <Tooltip
-                    contentStyle={{
-                      background:   '#111827',
-                      border:       '1px solid rgba(255,255,255,0.1)',
-                      borderRadius: '12px',
-                      color:        '#F1F5F9',
-                    }}
-                  />
-                  <Legend
-                    formatter={value => (
-                      <span style={{ color: '#94A3B8', fontSize: '13px' }}>
-                        {value}
-                      </span>
-                    )}
-                  />
+                  <Tooltip contentStyle={{
+                    background: '#111827',
+                    border: '1px solid rgba(255,255,255,0.1)',
+                    borderRadius: '12px', color: '#F1F5F9',
+                  }} />
+                  <Legend formatter={v => (
+                    <span style={{ color: '#94A3B8', fontSize: '13px' }}>
+                      {v}
+                    </span>
+                  )} />
                 </PieChart>
               </ResponsiveContainer>
-
               <div className="mt-4 space-y-2">
                 {[
-                  {
-                    label: 'Safe URLs',
-                    value: stats.safe_found,
-                    color: 'text-safe',
-                    bg:    'bg-safe/10',
-                  },
-                  {
-                    label: 'Phishing Detected',
-                    value: stats.phishing_found,
-                    color: 'text-danger',
-                    bg:    'bg-danger/10',
-                  },
+                  { label: 'Safe URLs',         value: stats.safe_found,     color: 'text-safe',    bg: 'bg-safe/10'    },
+                  { label: 'Phishing Detected', value: stats.phishing_found, color: 'text-danger',  bg: 'bg-danger/10'  },
                 ].map((item, i) => (
                   <div key={i}
                     className={`flex justify-between items-center
